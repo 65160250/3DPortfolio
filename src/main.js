@@ -642,36 +642,38 @@ document.addEventListener("keydown", (e)=>{ if(e.key==="Escape" && modalEl.class
 
 /* === Certificates: open with existing Lightbox === */
 (function initCertificatesLightbox(){
-  // เลือกรูปใบประกาศตามโครง HTML ปัจจุบัน
-  const certImgs = document.querySelectorAll('#certificates .certificate-img');
-  if (!certImgs.length) return;
+  // เลือกทุกการ์ดใบประกาศ
+  const cards = document.querySelectorAll('.cert-card');
+  if (!cards.length) return;
 
-  // อ้างอิง lightbox เดิม (ตัวเดียวกับ gallery)
-  const lightbox   = document.getElementById('lightbox');
-  const lbTitle    = document.getElementById('lightboxTitle');
-  const lbCarousel = document.getElementById('lightboxCarousel');
-  const lbNav      = document.getElementById('lightboxNav');
+  // ฟังก์ชันเปิด lightbox แบบ single image
+  function openCertLightbox(title, imgSrc){
+    const lightbox = document.getElementById('lightbox');
+    const lbTitle  = document.getElementById('lightboxTitle');
+    const lbCarousel = document.getElementById('lightboxCarousel');
+    const lbNav = document.getElementById('lightboxNav');
 
-  function openSingleImageLightbox(src, title){
     lbTitle.textContent = title || 'Certificate';
-    lbCarousel.innerHTML = `
-      <div class="lightbox-slide active">
-        <img src="${src}" alt="${title || 'Certificate'}">
-      </div>`;
-    lbNav.innerHTML = ''; // ไม่ต้องมีจุดนำทางสำหรับภาพเดี่ยว
+    lbCarousel.innerHTML = '';
+    lbNav.innerHTML = '';
+
+    const slide = document.createElement('div');
+    slide.className = 'lightbox-slide active';
+    slide.innerHTML = `<img src="${imgSrc}" alt="${title||''}">`;
+    lbCarousel.appendChild(slide);
+
     lightbox.classList.add('active');
     document.body.style.overflow = 'hidden';
   }
 
-  certImgs.forEach(img => {
-    img.style.cursor = 'zoom-in';
-    img.addEventListener('click', () => {
-      const src = img.getAttribute('data-cert') || img.getAttribute('src');
-      const title = img.getAttribute('alt') || 'Certificate';
-      if (src) openSingleImageLightbox(src, title);
+  // bind click
+  cards.forEach(card=>{
+    card.addEventListener('click', ()=>{
+      const title = card.getAttribute('data-title') || card.querySelector('.cert-title')?.textContent || 'Certificate';
+      const img   = card.getAttribute('data-img') || card.querySelector('img')?.getAttribute('src');
+      if (img) openCertLightbox(title, img);
     });
   });
 })();
-
 
 
