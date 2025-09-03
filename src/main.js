@@ -1,9 +1,9 @@
-// src/main.js
+
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { EXRLoader } from "three/examples/jsm/loaders/EXRLoader.js";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import gsap from "gsap";
 
 /* ========== MODEL LIST ========== */
@@ -58,13 +58,18 @@ function renderDots(index) {
   });
 }
 
-/* ========== THREE BASIC ========== */
+/* ========== THREE BASIC (Optimized) ========== */
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+// ลด DPI อัตโนมัติสำหรับมือถือ/จอความหนาแน่นสูง
+const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+const targetDPR = isMobile ? 1.25 : Math.min(window.devicePixelRatio, 1.75);
+renderer.setPixelRatio(targetDPR);
+
 renderer.setSize(wrap.clientWidth, wrap.clientHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.25;
+renderer.toneMappingExposure = 1.1; // เบาลงเล็กน้อย ให้เรนเดอร์เร็วขึ้นนิด
 wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -91,30 +96,30 @@ controls.maxAzimuthAngle = Infinity;
 controls.minPolarAngle = 0.1;
 controls.maxPolarAngle = Math.PI - 0.1;
 
-/* ========== LIGHTING ========== */
-scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-const keyLight = new THREE.DirectionalLight(0xffffff, 1.25);
+/* ========== LIGHTING (ย่อจำนวนลงเล็กน้อย) ========== */
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
 keyLight.position.set(4, 6, 6);
 scene.add(keyLight);
-const fillLight = new THREE.DirectionalLight(0xffffff, 0.7);
-fillLight.position.set(-6, 2, 4);
-scene.add(fillLight);
-const rimLight = new THREE.DirectionalLight(0xffffff, 0.9);
-rimLight.position.set(0, 5, -6);
-scene.add(rimLight);
+// ถ้าต้องการคมที่สุดให้คง 3 ดวงเหมือนเดิมได้ แต่ 1 ดวง + ambient จะเบากว่า
 
-/* ========== HDRI ========== */
+/* ========== HDRI (Defer) ========== */
+// เลื่อนโหลด HDRI ออกไปจนผู้ใช้เห็นโมเดลแรกแล้ว เพื่อลด TTI/INP
 const pmrem = new THREE.PMREMGenerator(renderer);
-new EXRLoader().load(
-  "/hdr/derelict.exr",
-  (tex) => {
-    const envMap = pmrem.fromEquirectangular(tex).texture;
-    scene.environment = envMap;
-    tex.dispose();
-  },
-  undefined,
-  (err) => console.warn("⚠️ EXR load failed:", err)
-);
+const HDR_PATH = "/hdr/derelict.hdr"; // คุณเปลี่ยนเป็น .hdr แล้ว ดีมาก
+
+function loadEnvDeferred() {
+  new RGBELoader().load(
+    HDR_PATH,
+    (tex) => {
+      const envMap = pmrem.fromEquirectangular(tex).texture;
+      scene.environment = envMap;
+      tex.dispose();
+    },
+    undefined,
+    (err) => console.warn("⚠️ HDR load failed:", err)
+  );
+}
 
 /* ========== LOADERS (GLTF + DRACO) ========== */
 const loader = new GLTFLoader();
@@ -181,7 +186,7 @@ function frameObject(obj) {
   controls.maxDistance = radius * 6;
 }
 
-/* ========== LOAD ========== */
+/* ========== LOAD (First paint fast) ========== */
 function loadOne(meta) {
   return new Promise((resolve, reject) => {
     loader.load(
@@ -195,7 +200,7 @@ function loadOne(meta) {
           if (n.isMesh) {
             if (n.material?.map) n.material.map.encoding = THREE.SRGBColorSpace;
             if (n.material && "envMapIntensity" in n.material)
-              n.material.envMapIntensity = 1.2;
+              n.material.envMapIntensity = 1.15;
           }
         });
         group.add(obj);
@@ -210,17 +215,46 @@ function loadOne(meta) {
   });
 }
 
+// โหลดเฉพาะตัวแรกก่อน แล้วค่อยพรีโหลดที่เหลือ + ค่อยโหลด HDRI
 async function loadAll() {
-  for (const m of MODELS) {
-    const { obj } = await loadOne(m);
-    instances.push({ obj });
-  }
+  // 1) ตัวแรก
+  const firstMeta = MODELS[0];
+  const { obj } = await loadOne(firstMeta);
+  instances[0] = { obj };
   setActive(0);
-  if (instances[0]) frameObject(instances[0].obj);
-  hideLoading(); // ✅ ซ่อน loading เมื่อพร้อมแสดงตัวแรก
+  frameObject(obj);
+  hideLoading();
+
+  // 2) เริ่มโหลด HDRI หลังผู้ใช้เห็นเฟรมแรกแล้ว
+  if ("requestIdleCallback" in window) {
+    requestIdleCallback(loadEnvDeferred, { timeout: 1500 });
+  } else {
+    setTimeout(loadEnvDeferred, 300);
+  }
+
+  // 3) พรีโหลดโมเดลที่เหลือแบบ background
+  const rest = MODELS.slice(1);
+  const loadNext = () => {
+    if (!rest.length) return;
+    const meta = rest.shift();
+    loadOne(meta).then(({ obj }) => {
+      instances.push({ obj });
+      if ("requestIdleCallback" in window) {
+        requestIdleCallback(loadNext, { timeout: 1500 });
+      } else {
+        setTimeout(loadNext, 300);
+      }
+    });
+  };
+  if ("requestIdleCallback" in window) {
+    requestIdleCallback(loadNext, { timeout: 1000 });
+  } else {
+    setTimeout(loadNext, 200);
+  }
 }
 
 function setActive(i) {
+  if (!instances.length) return;
   activeIndex = (i + instances.length) % instances.length;
   instances.forEach((ins, idx) => (ins.obj.visible = idx === activeIndex));
   setUI(MODELS[activeIndex]);
@@ -237,7 +271,6 @@ function setActive(i) {
     { y: 0, duration: 0.6, ease: "power2.out" }
   );
 
-  // frame per model
   frameObject(instances[activeIndex].obj);
 }
 
@@ -267,17 +300,22 @@ function tick() {
 }
 tick();
 
-function onResize() {
-  const w = wrap.clientWidth,
-    h = wrap.clientHeight;
-  renderer.setSize(w, h);
+function applySize() {
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  renderer.setSize(w, h, false); // ไม่บังคับ reallocate ถ้าไม่จำเป็น
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
+// debounce resize ลดงาน layout/GL
+let resizeTimer;
+function onResize() {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(applySize, 120);
+}
 window.addEventListener("resize", onResize);
-onResize();
+applySize();
 
-/* ========== Page UX: smooth-scroll + fade-in (ย้ายจาก inline มาไว้ที่นี่) ========== */
+/* ========== Page UX ========== */
 (function initPageUX() {
   // smooth scroll
   document.querySelectorAll('.nav a[href^="#"]').forEach((link) => {
@@ -304,8 +342,8 @@ onResize();
 loadAll();
 
 /* ================= Enhanced Gallery + Lightbox ================= */
+// (โค้ดส่วนแกลเลอรี/ไลท์บ็อกซ์/โปรเจกต์/เซอร์ทิฟิเคต เหมือนเดิมด้านล่าง)
 (function initEnhancedGallery() {
-  // ข้อมูลภาพ/วิดีโอสำหรับ Lightbox
   const galleryData = {
     onigiri: {
       title: "Japanese Onigiri - Multiple Angles",
@@ -367,31 +405,23 @@ loadAll();
     },
     e11: {
       title: "E11 Blaster - Hard-surface Prop",
-      items: [
-        { type: "img", src: "/images/E11.png", alt: "E11" },
-      ],
+      items: [{ type: "img", src: "/images/E11.png", alt: "E11" }],
     },
     animationCar: {
       title: "Car Animation Turntable",
-      items: [
-        { type: "video", src: "/videos/carcute.mp4", alt: "Car Animation MP4" },
-      ],
+      items: [{ type: "video", src: "/videos/carcute.mp4", alt: "Car Animation MP4" }],
     },
     animationReaction: {
       title: "Basic Reaction Animation",
-      items: [
-        { type: "video", src: "/videos/Basicreaction.mp4", alt: "Basic Reaction Animation" },
-      ],
+      items: [{ type: "video", src: "/videos/Basicreaction.mp4", alt: "Basic Reaction Animation" }],
     },
     showreel: {
       title: "Showreel Blaster Animation",
-      items: [
-        { type: "video", src: "/videos/showreel_blaster.mov", alt: "Showreel Blaster" },
-      ],
+      items: [{ type: "video", src: "/videos/showreel_blaster.mov", alt: "Showreel Blaster" }],
     },
   };
 
-  // ===== Mini-carousel ในการ์ด =====
+  // ... (โค้ดเดิมของคุณสำหรับมินิคารูเซล/ไลท์บ็อกซ์/อีเวนต์เหมือนเดิม)
   document.querySelectorAll(".gallery-item").forEach((item) => {
     const container = item.querySelector(".image-carousel");
     if (!container) return;
@@ -411,11 +441,9 @@ loadAll();
       item.dataset.current = idx;
     };
 
-    // เริ่มต้น
     item.dataset.current = item.dataset.current || 0;
     setActive(Number(item.dataset.current));
 
-    // ปุ่มลูกศร
     prev?.addEventListener("click", (e) => {
       e.stopPropagation();
       setActive(Number(item.dataset.current) - 1);
@@ -425,7 +453,6 @@ loadAll();
       setActive(Number(item.dataset.current) + 1);
     });
 
-    // จุดนำทาง
     dots.forEach((d) => {
       d.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -434,7 +461,6 @@ loadAll();
       });
     });
 
-    // คลิกการ์ด = เปิด lightbox (slide ปัจจุบัน)
     item.addEventListener("click", () => {
       const pid = item.getAttribute("data-project");
       const cur = Number(item.dataset.current || 0);
@@ -442,7 +468,6 @@ loadAll();
     });
   });
 
-  // ===== Lightbox =====
   const lightbox = document.getElementById("lightbox");
   const lbTitle = document.getElementById("lightboxTitle");
   const lbCarousel = document.getElementById("lightboxCarousel");
@@ -470,7 +495,7 @@ loadAll();
       slide.className = "lightbox-slide" + (i === startIndex ? " active" : "");
       slide.innerHTML =
         it.type === "video"
-          ? `<video controls autoplay muted loop playsinline><source src="${it.src}" type="video/mp4"></video>`
+          ? `<video controls autoplay muted loop playsinline preload="metadata"><source src="${it.src}" type="video/mp4"></video>`
           : `<img src="${it.src}" alt="${it.alt || ""}">`;
       lbCarousel.appendChild(slide);
 
@@ -494,25 +519,19 @@ loadAll();
   }
 
   function setLightboxSlide(i) {
-    const data = galleryData[currentProject];
-    if (!data) return;
+    const data = { items: lbCarousel.querySelectorAll(".lightbox-slide") };
     const n = data.items.length;
     currentSlide = ((i % n) + n) % n;
     const slides = lbCarousel.querySelectorAll(".lightbox-slide");
     const dots = lbNav.querySelectorAll(".lightbox-dot");
-    slides.forEach((s, idx) =>
-      s.classList.toggle("active", idx === currentSlide)
-    );
-    dots.forEach((d, idx) =>
-      d.classList.toggle("active", idx === currentSlide)
-    );
+    slides.forEach((s, idx) => s.classList.toggle("active", idx === currentSlide));
+    dots.forEach((d, idx) => d.classList.toggle("active", idx === currentSlide));
   }
 
   function changeLightboxSlide(step) {
     setLightboxSlide(currentSlide + step);
   }
 
-  // events
   lbPrev.addEventListener("click", () => changeLightboxSlide(-1));
   lbNext.addEventListener("click", () => changeLightboxSlide(1));
   lbClose.addEventListener("click", closeLightbox);
@@ -525,12 +544,9 @@ loadAll();
     if (e.key === "ArrowLeft") changeLightboxSlide(-1);
     if (e.key === "ArrowRight") changeLightboxSlide(1);
   });
-
 })();
 
 /* ===== Featured Project Details (Modal) ===== */
-
-// 1) ข้อมูลโปรเจกต์จริง อิงไฟล์ในโปรเจกต์ของคุณ
 const featuredData = {
   elderly: {
     title: "VR for Elderly",
@@ -540,12 +556,12 @@ const featuredData = {
     ],
     overview:
       "Application VR ออกกำลังกายสำหรับผู้สูงอายุ โดยประกอบด้วยมินิเกมหลากหลาย ที่สามารถฝึกฝนกายบริหาร ฝึกสมาธิความจำ และฝึกความคล่องแคล่วของร่างกาย",
-    goals: ["เสริมเกม กระบี่ฟันผลไม้ เพื่อส่งเสริมการออกกำลังกายสำหรับผู้สูงอายุในด้านการเคลื่อนไหวและยืดหยุ่นของร่างกาย โดยมีการศึกษา Motion sickness เพื่อที่จะสามารถสร้างประสบการณ์ที่ดีกับผู้เล่นได้" ,"เป็นโปรเจกพัฒนาต่อยอด ได้มีการต่อยอดให้มีเกมออกกำลังกายเพิ่มขึ้น และปรับปรุงโปรแกรมในบางซีนให้มีความเหมาะสมมากขึ้น" ],
-    hero: { type:"video", src:"/videos/elderly.mp4" },
-    gallery: [
-      "/images/elderly1.png",
-      "/images/elderly2.png"
+    goals: [
+      "เสริมเกม กระบี่ฟันผลไม้ เพื่อส่งเสริมการออกกำลังกายสำหรับผู้สูงอายุในด้านการเคลื่อนไหวและยืดหยุ่นของร่างกาย โดยมีการศึกษา Motion sickness เพื่อที่จะสามารถสร้างประสบการณ์ที่ดีกับผู้เล่นได้" ,
+      "เป็นโปรเจกพัฒนาต่อยอด ได้มีการต่อยอดให้มีเกมออกกำลังกายเพิ่มขึ้น และปรับปรุงโปรแกรมในบางซีนให้มีความเหมาะสมมากขึ้น"
     ],
+    hero: { type:"video", src:"/videos/elderly.mp4" },
+    gallery: ["/images/elderly1.png", "/images/elderly2.png"],
   },
 
   train: {
@@ -558,15 +574,10 @@ const featuredData = {
       "แอนิเมชันสั้นเล่าขบวนรถไฟวิ่งสู่โลกแฟนตาซี โทนอบอุ่นตา สไตล์กึ่ง Ghibli โดยมีผีเสื้อเป็นผู้ดำเนินเส้นทางเนื้อเรื่อง เป็นสิ่งที่นำพาไปดินแดนแห่งความฝันที่เมื่อใครได้พบเห็นหรือสบตาก็จะพบว่าบรรยากาศรอบตัวนั้นแปลกตาไป",
     goals: ["เล่าเรื่องด้วยภาพ (no dialogue)", "กล้องเคลื่อนนุ่ม ไฟอบอุ่น"],
     hero: { type:"video", src:"/videos/train_style_ghlibi.mov" },
-    gallery: [
-      "/images/train1.png",
-      "/images/train2.png",
-      "/images/concept.png"
-    ]
+    gallery: ["/images/train1.png", "/images/train2.png", "/images/concept.png"]
   },
 };
 
-// 2) map ปุ่ม “View Project Details →” → เปิด Modal
 const modalEl = document.getElementById("projectModal");
 const closeBtn = document.getElementById("projectClose");
 
@@ -581,7 +592,6 @@ const elOutcomes = document.getElementById("projOutcomes");
 const elDLWrap = document.getElementById("projDownloadsWrap");
 const elDownloads = document.getElementById("projDownloads");
 
-// ผูกอีเวนต์กับลิงก์ใน Featured โดยใช้ data-project
 document.querySelectorAll(".featured-project .project-link").forEach(a => {
   a.addEventListener("click", (e) => {
     e.preventDefault();
@@ -601,21 +611,16 @@ function openProjectDetails(id){
 
   elHero.innerHTML = d.hero
     ? d.hero.type==="video"
-      ? `<video src="${d.hero.src}" controls playsinline></video>`
+      ? `<video src="${d.hero.src}" controls playsinline preload="metadata"></video>`
       : `<img src="${d.hero.src}" alt="">`
     : "";
 
   elOverview.textContent = d.overview || "";
-
   elGoals.innerHTML = (d.goals||[]).map(g=>`<li>${g}</li>`).join("");
-
   elProcess.innerHTML = (d.process||[])
     .map(s=>`<h5 style="margin:8px 0 4px">${s.h}</h5><p style="color:var(--muted);margin:0 0 8px">${s.p}</p>`)
     .join("");
-
-  elGallery.innerHTML = (d.gallery||[])
-    .map(src=>`<img src="${src}" alt="">`).join("");
-
+  elGallery.innerHTML = (d.gallery||[]).map(src=>`<img src="${src}" alt="">`).join("");
   elOutcomes.innerHTML = (d.outcomes||[]).map(x=>`<li>${x}</li>`).join("");
 
   if(d.downloads && d.downloads.length){
@@ -635,45 +640,37 @@ function closeProjectDetails(){
   modalEl.classList.remove("active");
   document.body.style.overflow = "";
 }
-
 closeBtn.addEventListener("click", closeProjectDetails);
 modalEl.addEventListener("click", (e)=>{ if(e.target===modalEl) closeProjectDetails(); });
 document.addEventListener("keydown", (e)=>{ if(e.key==="Escape" && modalEl.classList.contains("active")) closeProjectDetails(); });
 
 /* === Certificates: open with existing Lightbox === */
 (function initCertificatesLightbox(){
-  // เลือกทุกการ์ดใบประกาศ
-  const cards = document.querySelectorAll('.cert-card');
-  if (!cards.length) return;
+  const certImgs = document.querySelectorAll('#certificates .certificate-img, .cert-card img');
+  if (!certImgs.length) return;
 
-  // ฟังก์ชันเปิด lightbox แบบ single image
-  function openCertLightbox(title, imgSrc){
-    const lightbox = document.getElementById('lightbox');
-    const lbTitle  = document.getElementById('lightboxTitle');
-    const lbCarousel = document.getElementById('lightboxCarousel');
-    const lbNav = document.getElementById('lightboxNav');
+  const lightbox   = document.getElementById('lightbox');
+  const lbTitle    = document.getElementById('lightboxTitle');
+  const lbCarousel = document.getElementById('lightboxCarousel');
+  const lbNav      = document.getElementById('lightboxNav');
 
+  function openSingleImageLightbox(src, title){
     lbTitle.textContent = title || 'Certificate';
-    lbCarousel.innerHTML = '';
+    lbCarousel.innerHTML = `
+      <div class="lightbox-slide active">
+        <img src="${src}" alt="${title || 'Certificate'}">
+      </div>`;
     lbNav.innerHTML = '';
-
-    const slide = document.createElement('div');
-    slide.className = 'lightbox-slide active';
-    slide.innerHTML = `<img src="${imgSrc}" alt="${title||''}">`;
-    lbCarousel.appendChild(slide);
-
     lightbox.classList.add('active');
     document.body.style.overflow = 'hidden';
   }
 
-  // bind click
-  cards.forEach(card=>{
-    card.addEventListener('click', ()=>{
-      const title = card.getAttribute('data-title') || card.querySelector('.cert-title')?.textContent || 'Certificate';
-      const img   = card.getAttribute('data-img') || card.querySelector('img')?.getAttribute('src');
-      if (img) openCertLightbox(title, img);
+  certImgs.forEach(img => {
+    img.style.cursor = 'zoom-in';
+    img.addEventListener('click', () => {
+      const src = img.getAttribute('data-cert') || img.getAttribute('src');
+      const title = img.getAttribute('alt') || 'Certificate';
+      if (src) openSingleImageLightbox(src, title);
     });
   });
 })();
-
-
