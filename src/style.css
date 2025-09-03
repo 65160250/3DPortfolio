@@ -70,6 +70,7 @@ body {
 .section-3d {
   position: relative;
   padding: 48px 0 24px;
+  
 }
 .three-wrap {
   position: relative;
@@ -82,6 +83,7 @@ body {
 #three-canvas {
   position: absolute;
   inset: 0;
+  background: #6969697e;
 }
 .bg-decor {
   position: absolute;
@@ -89,14 +91,16 @@ body {
   z-index: 0;
   background: radial-gradient(
       60% 50% at 20% 30%,
-      rgba(159, 208, 231, 0.164),
+      rgba(221, 108, 165, 0.164),
       transparent 60%
     ),
     radial-gradient(
       50% 40% at 80% 70%,
-      rgba(179, 147, 255, 0.192),
+      rgba(20, 240, 68, 0.137),
       transparent 60%
     );
+    
+    
 }
 .ui.overlay {
   position: absolute;
@@ -107,7 +111,7 @@ body {
   padding: 18px;
   pointer-events: none;
   z-index: 2;
-  background: linear-gradient(to top, rgba(230, 195, 195, 0.3), transparent 30%);
+  background: linear-gradient(to top, rgba(118, 129, 158, 0.3), transparent 30%);
 }
 .controls-help {
   position: absolute;
