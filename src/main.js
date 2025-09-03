@@ -416,7 +416,7 @@ loadAll();
     },
     showreel: {
       title: "Showreel Blaster Animation",
-      items: [{ type: "video", src: "/videos/showreel_blaster.mov", alt: "Showreel Blaster" }],
+      items: [{ type: "video", src: "/videos/Showreel_blaster.mp4", alt: "Showreel Blaster" }],
     },
   };
 
@@ -572,7 +572,7 @@ const featuredData = {
     overview:
       "แอนิเมชันสั้นเล่าขบวนรถไฟวิ่งสู่โลกแฟนตาซี โทนอบอุ่นตา สไตล์กึ่ง Ghibli โดยมีผีเสื้อเป็นผู้ดำเนินเส้นทางเนื้อเรื่อง เป็นสิ่งที่นำพาไปดินแดนแห่งความฝันที่เมื่อใครได้พบเห็นหรือสบตาก็จะพบว่าบรรยากาศรอบตัวนั้นแปลกตาไป",
     goals: ["เล่าเรื่องด้วยภาพ (no dialogue)", "โทนสีอบอุ่น ธีมแห่งความฝัน"],
-    hero: { type:"video", src:"/videos/train_style_ghlibi.mov" },
+    hero: { type:"video", src:"/videos/train_style_ghlibi.mp4" },
     gallery: ["/images/train1.png", "/images/train2.png", "/images/concept.png"]
   },
 };
